@@ -46,7 +46,7 @@ export const ChatSidebar = ({
   return (
     <div className="w-full md:w-80 h-full flex flex-col border-r border-border/50 glass">
       {/* Header */}
-      <div className="p-4 border-b border-border/50">
+      <div className="p-4 border-b border-border/50 safe-area-top">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
             <div className="w-2 h-2 rounded-full bg-primary animate-pulse-glow" />

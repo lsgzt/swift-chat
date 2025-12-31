@@ -10,12 +10,24 @@ interface MessageWithSender extends Message {
   sender?: Profile;
 }
 
+interface SendMessageOptions {
+  text?: string;
+  file?: File;
+}
+
 export const useChat = (currentProfileId: string | undefined, selectedUserId: string | undefined) => {
   const [messages, setMessages] = useState<MessageWithSender[]>([]);
   const [loading, setLoading] = useState(false);
   const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
+  const [uploading, setUploading] = useState(false);
   const channelRef = useRef<RealtimeChannel | null>(null);
   const typingChannelRef = useRef<RealtimeChannel | null>(null);
+  const onNewMessageRef = useRef<((message: Message) => void) | null>(null);
+
+  // Allow external callback for new messages (for notifications)
+  const setOnNewMessage = useCallback((callback: (message: Message) => void) => {
+    onNewMessageRef.current = callback;
+  }, []);
 
   // Load chat history
   const loadMessages = useCallback(async () => {
@@ -37,25 +49,87 @@ export const useChat = (currentProfileId: string | undefined, selectedUserId: st
     setLoading(false);
   }, [currentProfileId, selectedUserId]);
 
-  // Send message
-  const sendMessage = useCallback(async (text: string) => {
-    if (!currentProfileId || !selectedUserId || !text.trim()) return;
+  // Upload file
+  const uploadFile = async (file: File): Promise<{ url: string; name: string; type: string } | null> => {
+    if (!currentProfileId) return null;
 
-    const newMessage = {
+    const fileExt = file.name.split('.').pop();
+    const fileName = `${currentProfileId}/${Date.now()}.${fileExt}`;
+    
+    const { error: uploadError } = await supabase.storage
+      .from('chat-attachments')
+      .upload(fileName, file);
+
+    if (uploadError) {
+      console.error('Error uploading file:', uploadError);
+      return null;
+    }
+
+    const { data } = supabase.storage
+      .from('chat-attachments')
+      .getPublicUrl(fileName);
+
+    return {
+      url: data.publicUrl,
+      name: file.name,
+      type: file.type,
+    };
+  };
+
+  // Send message
+  const sendMessage = useCallback(async (textOrOptions: string | SendMessageOptions) => {
+    if (!currentProfileId || !selectedUserId) return;
+
+    let text = '';
+    let file: File | undefined;
+
+    if (typeof textOrOptions === 'string') {
+      text = textOrOptions;
+    } else {
+      text = textOrOptions.text || '';
+      file = textOrOptions.file;
+    }
+
+    if (!text.trim() && !file) return;
+
+    setUploading(!!file);
+
+    let fileData: { url: string; name: string; type: string } | null = null;
+    if (file) {
+      fileData = await uploadFile(file);
+      if (!fileData && !text.trim()) {
+        setUploading(false);
+        return; // Failed to upload and no text
+      }
+    }
+
+    const newMessage: any = {
       sender_id: currentProfileId,
       receiver_id: selectedUserId,
-      text: text.trim(),
+      text: text.trim() || (fileData ? '' : ''),
     };
+
+    if (fileData) {
+      newMessage.file_url = fileData.url;
+      newMessage.file_name = fileData.name;
+      newMessage.file_type = fileData.type;
+    }
 
     // Optimistic update
     const optimisticMessage: MessageWithSender = {
       id: `temp-${Date.now()}`,
-      ...newMessage,
+      sender_id: currentProfileId,
+      receiver_id: selectedUserId,
+      text: newMessage.text,
       seen: false,
       created_at: new Date().toISOString(),
+      file_url: fileData?.url || null,
+      file_name: fileData?.name || null,
+      file_type: fileData?.type || null,
     };
     
     setMessages(prev => [...prev, optimisticMessage]);
+    setUploading(false);
 
     const { error } = await supabase
       .from('messages')
@@ -116,6 +190,11 @@ export const useChat = (currentProfileId: string | undefined, selectedUserId: st
             if (newMsg.receiver_id === currentProfileId) {
               markAsSeen();
             }
+
+            // Trigger notification callback
+            if (newMsg.sender_id !== currentProfileId && onNewMessageRef.current) {
+              onNewMessageRef.current(newMsg);
+            }
           }
         }
       )
@@ -160,5 +239,7 @@ export const useChat = (currentProfileId: string | undefined, selectedUserId: st
     sendMessage,
     typingUsers,
     sendTypingIndicator,
+    uploading,
+    setOnNewMessage,
   };
 };
