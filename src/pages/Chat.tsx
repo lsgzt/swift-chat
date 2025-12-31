@@ -1,13 +1,15 @@
 import { useState, useEffect, useCallback } from 'react';
-import { motion } from 'framer-motion';
-import { Menu, X } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Menu, X, Bell } from 'lucide-react';
 import { ChatSidebar } from '@/components/chat/ChatSidebar';
 import { ChatWindow } from '@/components/chat/ChatWindow';
 import { useAuth } from '@/hooks/useAuth';
 import { useChat } from '@/hooks/useChat';
 import { useUsers } from '@/hooks/useUsers';
+import { useNotifications } from '@/hooks/useNotifications';
 import { Tables } from '@/integrations/supabase/types';
 import { Button } from '@/components/ui/button';
+import { toast } from 'sonner';
 
 type Profile = Tables<'profiles'>;
 
@@ -15,13 +17,40 @@ export const Chat = () => {
   const { profile, signOut, user } = useAuth();
   const [selectedUserId, setSelectedUserId] = useState<string | undefined>();
   const [selectedUser, setSelectedUser] = useState<Profile | null>(null);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [showChat, setShowChat] = useState(false);
 
   const { users, loading: usersLoading, searchUsers, getRecentConversations, setUsers } = useUsers(user?.id);
-  const { messages, loading: messagesLoading, sendMessage, typingUsers, sendTypingIndicator } = useChat(
+  const { messages, loading: messagesLoading, sendMessage, typingUsers, sendTypingIndicator, uploading, setOnNewMessage } = useChat(
     profile?.id,
     selectedUserId
   );
+  const { permission, requestPermission, sendNotification } = useNotifications();
+
+  // Request notification permission on mount
+  useEffect(() => {
+    if (permission === 'default') {
+      // Show a toast asking for permission
+      toast('Enable notifications?', {
+        description: 'Get notified when you receive new messages',
+        action: {
+          label: 'Enable',
+          onClick: () => requestPermission(),
+        },
+        duration: 10000,
+      });
+    }
+  }, [permission, requestPermission]);
+
+  // Set up notification callback
+  useEffect(() => {
+    setOnNewMessage((message) => {
+      const sender = users.find(u => u.id === message.sender_id);
+      sendNotification(`New message from @${sender?.username || 'Someone'}`, {
+        body: message.text || 'Sent an attachment',
+        tag: message.sender_id, // Prevents duplicate notifications from same sender
+      });
+    });
+  }, [setOnNewMessage, users, sendNotification]);
 
   // Load recent conversations on mount
   useEffect(() => {
@@ -40,10 +69,11 @@ export const Chat = () => {
 
   const handleSelectUser = useCallback((userId: string) => {
     setSelectedUserId(userId);
-    // Close sidebar on mobile
-    if (window.innerWidth < 768) {
-      setSidebarOpen(false);
-    }
+    setShowChat(true);
+  }, []);
+
+  const handleBackToList = useCallback(() => {
+    setShowChat(false);
   }, []);
 
   const handleSearch = useCallback((query: string) => {
@@ -59,35 +89,13 @@ export const Chat = () => {
   };
 
   return (
-    <div className="h-screen flex flex-col md:flex-row overflow-hidden relative">
+    <div className="h-[100dvh] flex overflow-hidden relative">
       {/* Background effects */}
       <div className="absolute inset-0 bg-gradient-to-br from-background via-background to-primary/5 pointer-events-none" />
       <div className="absolute inset-0 scanline opacity-20 pointer-events-none" />
 
-      {/* Mobile menu button */}
-      <div className="md:hidden fixed top-4 left-4 z-50">
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => setSidebarOpen(!sidebarOpen)}
-          className="bg-card/80 backdrop-blur"
-        >
-          {sidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-        </Button>
-      </div>
-
-      {/* Sidebar */}
-      <motion.div
-        initial={false}
-        animate={{
-          x: sidebarOpen ? 0 : '-100%',
-          opacity: sidebarOpen ? 1 : 0,
-        }}
-        transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-        className={`fixed md:relative inset-y-0 left-0 z-40 md:z-auto ${
-          sidebarOpen ? 'pointer-events-auto' : 'pointer-events-none md:pointer-events-auto'
-        }`}
-      >
+      {/* Desktop layout: Side-by-side */}
+      <div className="hidden md:flex w-full h-full relative z-10">
         <ChatSidebar
           currentProfile={profile}
           users={users}
@@ -97,27 +105,65 @@ export const Chat = () => {
           onSignOut={handleSignOut}
           loading={usersLoading}
         />
-      </motion.div>
+        <div className="flex-1 h-full">
+          <ChatWindow
+            messages={messages}
+            currentProfileId={profile?.id || ''}
+            selectedUser={selectedUser}
+            onSendMessage={sendMessage}
+            onTyping={sendTypingIndicator}
+            typingUsers={typingUsers}
+            loading={messagesLoading}
+            uploading={uploading}
+          />
+        </div>
+      </div>
 
-      {/* Overlay for mobile */}
-      {sidebarOpen && (
-        <div
-          className="fixed inset-0 bg-background/80 z-30 md:hidden"
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
-
-      {/* Chat window */}
-      <div className="flex-1 relative z-10">
-        <ChatWindow
-          messages={messages}
-          currentProfileId={profile?.id || ''}
-          selectedUser={selectedUser}
-          onSendMessage={sendMessage}
-          onTyping={sendTypingIndicator}
-          typingUsers={typingUsers}
-          loading={messagesLoading}
-        />
+      {/* Mobile layout: Full screen switching */}
+      <div className="md:hidden w-full h-full relative z-10">
+        <AnimatePresence initial={false} mode="wait">
+          {!showChat ? (
+            <motion.div
+              key="sidebar"
+              initial={{ x: -20, opacity: 0 }}
+              animate={{ x: 0, opacity: 1 }}
+              exit={{ x: -20, opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="w-full h-full"
+            >
+              <ChatSidebar
+                currentProfile={profile}
+                users={users}
+                selectedUserId={selectedUserId}
+                onSelectUser={handleSelectUser}
+                onSearch={handleSearch}
+                onSignOut={handleSignOut}
+                loading={usersLoading}
+              />
+            </motion.div>
+          ) : (
+            <motion.div
+              key="chat"
+              initial={{ x: 20, opacity: 0 }}
+              animate={{ x: 0, opacity: 1 }}
+              exit={{ x: 20, opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="w-full h-full"
+            >
+              <ChatWindow
+                messages={messages}
+                currentProfileId={profile?.id || ''}
+                selectedUser={selectedUser}
+                onSendMessage={sendMessage}
+                onTyping={sendTypingIndicator}
+                typingUsers={typingUsers}
+                loading={messagesLoading}
+                uploading={uploading}
+                onBackClick={handleBackToList}
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </div>
   );

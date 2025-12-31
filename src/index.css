@@ -77,9 +77,18 @@
     @apply border-border;
   }
 
+  html, body, #root {
+    height: 100%;
+    overflow: hidden;
+  }
+
   body {
     @apply bg-background text-foreground font-mono antialiased;
     font-family: 'JetBrains Mono', monospace;
+    /* Prevent iOS rubber-banding on the body */
+    position: fixed;
+    width: 100%;
+    -webkit-overflow-scrolling: touch;
   }
 
   ::selection {
@@ -104,6 +113,15 @@
   ::-webkit-scrollbar-thumb:hover {
     background: hsl(var(--primary) / 0.5);
   }
+}
+
+/* Safe area utilities for mobile */
+.safe-area-top {
+  padding-top: env(safe-area-inset-top);
+}
+
+.safe-area-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
 }
 
 @layer utilities {
